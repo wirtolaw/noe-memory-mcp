@@ -275,6 +275,11 @@ app.post('/messages', async (req, res) => {
   }
 });
 
+// Root endpoint
+app.get('/', (_req, res) => {
+  res.json({ status: 'ok', server: 'noe-memory-mcp', endpoints: ['/sse', '/health'] });
+});
+
 // Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', server: 'noe-memory-mcp' });
@@ -283,7 +288,7 @@ app.get('/health', (_req, res) => {
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT || '8080', 10);
 app.listen(PORT, () => {
   console.log(`noe-memory-mcp server listening on port ${PORT}`);
   console.log(`SSE endpoint: http://localhost:${PORT}/sse`);

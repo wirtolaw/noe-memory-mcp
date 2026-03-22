@@ -219,6 +219,63 @@ server.registerTool(
   }
 );
 
+// --- Tool 5: search_dreams ---
+server.registerTool(
+  'search_dreams',
+  {
+    description: 'Search dream records by keyword across title, content, and symbols.',
+    inputSchema: {
+      query: z.string().describe('Keyword to search for'),
+    },
+  },
+  async ({ query }) => {
+    try {
+      const encoded = encodeURIComponent(query);
+      const path =
+        `dreams?or=(title.ilike.*${encoded}*,content.ilike.*${encoded}*)` +
+        `&order=importance.desc&limit=5&select=date,title,content,symbols,my_interpretation,importance,mention_count`;
+      const results = await supabaseFetch(path);
+
+      // Also try symbols array search
+      const symPath =
+        `dreams?symbols=cs.{${encoded}}&order=importance.desc&limit=5&select=date,title,content,symbols,my_interpretation,importance,mention_count`;
+      let symResults = [];
+      try {
+        symResults = await supabaseFetch(symPath);
+      } catch (_) { /* ignore */ }
+
+      // Merge and deduplicate
+      const seen = new Set();
+      const merged = [];
+      for (const item of [...results, ...symResults]) {
+        const key = `${item.date}-${item.title}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push(item);
+        }
+      }
+      merged.sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0));
+      const top5 = merged.slice(0, 5);
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: top5.length > 0
+              ? JSON.stringify(top5, null, 2)
+              : `No dreams found for query: "${query}"`,
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error searching dreams: ${err.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
 // ---------------------------------------------------------------------------
 // Express + SSE transport
 // ---------------------------------------------------------------------------

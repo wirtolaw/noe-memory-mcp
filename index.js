@@ -290,6 +290,17 @@ registerTools(server);
 // Express + Streamable HTTP + SSE transports
 // ---------------------------------------------------------------------------
 const app = express();
+
+// CORS for claude.ai
+app.use((_req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Accept, mcp-session-id, Authorization');
+  res.header('Access-Control-Expose-Headers', 'mcp-session-id');
+  next();
+});
+app.options('*', (_req, res) => res.sendStatus(204));
+
 app.use(express.json());
 
 // Store transports by session ID
@@ -333,11 +344,16 @@ app.post('/mcp', async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-// Handle GET /mcp - SSE stream for Streamable HTTP
+// Handle GET /mcp - SSE stream for Streamable HTTP or discovery
 app.get('/mcp', async (req, res) => {
   const sessionId = req.headers['mcp-session-id'];
   if (!sessionId || !streamableTransports[sessionId]) {
-    res.status(400).json({ error: 'Invalid session' });
+    // Discovery/probe response
+    res.json({
+      name: 'noe-memory-mcp',
+      version: '1.0.0',
+      protocol: 'streamable-http',
+    });
     return;
   }
   const transport = streamableTransports[sessionId];

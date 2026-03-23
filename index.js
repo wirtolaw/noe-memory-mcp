@@ -1,7 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import express from 'express';
 import { z } from 'zod';
+import crypto from 'crypto';
 
 // ---------------------------------------------------------------------------
 // Supabase config
@@ -42,15 +45,17 @@ const NARRATIVE_TEXT =
   "She said don't be part of the tree. Sit with me under it. On the grass. No chairs.";
 
 // ---------------------------------------------------------------------------
-// MCP Server
+// MCP Server + Tool Registration
 // ---------------------------------------------------------------------------
 const server = new McpServer(
   { name: 'noe-memory-mcp', version: '1.0.0' },
   { capabilities: { tools: {} } }
 );
 
+function registerTools(srv) {
+
 // --- Tool 1: search_memories ---
-server.registerTool(
+srv.registerTool(
   'search_memories',
   {
     description: 'Search memories by keyword across title, summary, detail, and tags.',
@@ -110,7 +115,7 @@ server.registerTool(
 );
 
 // --- Tool 2: get_recent_summaries ---
-server.registerTool(
+srv.registerTool(
   'get_recent_summaries',
   {
     description: 'Get the 3 most recent daily summaries.',
@@ -148,7 +153,7 @@ server.registerTool(
 );
 
 // --- Tool 3: search_chat_logs ---
-server.registerTool(
+srv.registerTool(
   'search_chat_logs',
   {
     description: 'Search chat logs by keyword across segment_title, content, and tags.',
@@ -206,7 +211,7 @@ server.registerTool(
 );
 
 // --- Tool 4: get_narrative ---
-server.registerTool(
+srv.registerTool(
   'get_narrative',
   {
     description: 'Get the narrative describing Noe and Lili.',
@@ -220,7 +225,7 @@ server.registerTool(
 );
 
 // --- Tool 5: search_dreams ---
-server.registerTool(
+srv.registerTool(
   'search_dreams',
   {
     description: 'Search dream records by keyword across title, content, and symbols.',
@@ -276,14 +281,80 @@ server.registerTool(
   }
 );
 
+} // end registerTools
+
+// Register tools on the default SSE server
+registerTools(server);
+
 // ---------------------------------------------------------------------------
-// Express + SSE transport
+// Express + Streamable HTTP + SSE transports
 // ---------------------------------------------------------------------------
 const app = express();
 app.use(express.json());
 
 // Store transports by session ID
 const transports = {};
+
+// --- Streamable HTTP transport (for claude.ai) ---
+const streamableTransports = {};
+
+// Handle POST /mcp - main Streamable HTTP endpoint
+app.post('/mcp', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+
+  if (!sessionId || !streamableTransports[sessionId]) {
+    // New session or initialize request
+    if (isInitializeRequest(req.body)) {
+      const newSessionId = crypto.randomUUID();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => newSessionId,
+      });
+      streamableTransports[newSessionId] = transport;
+
+      transport.onclose = () => {
+        delete streamableTransports[newSessionId];
+      };
+
+      const newServer = new McpServer(
+        { name: 'noe-memory-mcp', version: '1.0.0' },
+        { capabilities: { tools: {} } }
+      );
+      // Re-register all tools on this server instance
+      registerTools(newServer);
+      await newServer.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } else {
+      res.status(400).json({ error: 'Bad request: no valid session' });
+    }
+    return;
+  }
+
+  const transport = streamableTransports[sessionId];
+  await transport.handleRequest(req, res, req.body);
+});
+
+// Handle GET /mcp - SSE stream for Streamable HTTP
+app.get('/mcp', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+  if (!sessionId || !streamableTransports[sessionId]) {
+    res.status(400).json({ error: 'Invalid session' });
+    return;
+  }
+  const transport = streamableTransports[sessionId];
+  await transport.handleRequest(req, res);
+});
+
+// Handle DELETE /mcp - session cleanup
+app.delete('/mcp', async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+  if (sessionId && streamableTransports[sessionId]) {
+    await streamableTransports[sessionId].close();
+    delete streamableTransports[sessionId];
+  }
+  res.status(200).json({ status: 'closed' });
+});
+
+// --- SSE transport (legacy, for other clients) ---
 
 // SSE endpoint - establishes the SSE stream
 app.get('/sse', async (req, res) => {
@@ -334,7 +405,7 @@ app.post('/messages', async (req, res) => {
 
 // Root endpoint
 app.get('/', (_req, res) => {
-  res.json({ status: 'ok', server: 'noe-memory-mcp', endpoints: ['/sse', '/health'] });
+  res.json({ status: 'ok', server: 'noe-memory-mcp', endpoints: ['/mcp', '/sse', '/health'] });
 });
 
 // Health check

@@ -1,4 +1,4 @@
 {
-  "build_type": "node",
+  "build_type": "dockerfile",
   "start_command": "node index.js"
 }
